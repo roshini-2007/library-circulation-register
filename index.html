@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Library Circulation Register</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        max-width: 1000px;
+        margin: 30px auto;
+        color: #222;
+        padding: 0 15px;
+    }
+
+    h2 { margin-top: 0; }
+
+    /* --- Tabs --- */
+    .tabs { margin-bottom: 20px; }
+    .tabs button {
+        padding: 8px 16px;
+        margin-right: 8px;
+        cursor: pointer;
+        border: 1px solid #16325c;
+        background: white;
+        color: #16325c;
+        border-radius: 4px;
+    }
+    .tabs button.active {
+        background: #16325c;
+        color: white;
+    }
+
+    .screen { display: none; }
+    .screen.active { display: block; }
+
+    /* --- Form --- */
+    .form-box { max-width: 450px; }
+    label { display: block; margin-top: 12px; font-weight: bold; }
+    input, select {
+        width: 100%;
+        padding: 6px;
+        margin-top: 4px;
+        box-sizing: border-box;
+    }
+    button.primary {
+        margin-top: 20px;
+        padding: 8px 16px;
+        cursor: pointer;
+        background: #16325c;
+        color: white;
+        border: none;
+        border-radius: 4px;
+    }
+
+    .state-box {
+        padding: 12px 16px;
+        border-radius: 6px;
+        margin: 15px 0;
+    }
+    .state-error { background: #fdecea; color: #a4262c; }
+    .state-empty { background: #f4f4f4; color: #555; }
+
+    /* --- Toolbar --- */
+    .toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin: 15px 0;
+        flex-wrap: wrap;
+    }
+    .toolbar input[type="text"] { width: 220px; }
+    .toolbar select, .toolbar button { width: auto; margin-top: 0; }
+
+    .count-line { font-size: 14px; color: #555; margin-bottom: 10px; }
+
+    /* --- Table --- */
+    table { border-collapse: collapse; width: 100%; }
+    th, td {
+        border: 1px solid #ccc;
+        padding: 6px 8px;
+        font-size: 14px;
+        text-align: left;
+    }
+    th { background: #16325c; color: white; }
+    .Overdue { color: red; font-weight: bold; }
+    .Returned { color: green; }
+    .Issued { color: #b8860b; }
+    table button { padding: 3px 8px; cursor: pointer; }
+
+    .note {
+        background: #fff8e1;
+        border: 1px solid #ffe082;
+        padding: 10px 14px;
+        border-radius: 6px;
+        font-size: 13px;
+        margin-bottom: 20px;
+    }
+</style>
+</head>
+<body>
+
+<h2>Library Book Circulation and Overdue Register</h2>
+
+<div class="note">
+    This version stores data only in the browser's memory (no
+    database). Refreshing the page resets it back to the sample data.
+</div>
+
+<div class="tabs">
+    <button id="tab-issue" class="active" onclick="showScreen('issue')">Issue a Book</button>
+    <button id="tab-records" onclick="showScreen('records')">View Records</button>
+</div>
+
+<!-- ===================== ISSUE SCREEN ===================== -->
+<div id="screen-issue" class="screen active">
+    <h3>Issue a Book</h3>
+
+    <div id="issue-errors"></div>
+
+    <form id="issue-form" class="form-box" onsubmit="return handleAddRecord(event)">
+        <label>Book ID</label>
+        <input type="text" id="book_id">
+
+        <label>Title</label>
+        <input type="text" id="title">
+
+        <label>Member Name</label>
+        <input type="text" id="member_name">
+
+        <label>Issue Date</label>
+        <input type="date" id="issue_date">
+
+        <label>Due Date</label>
+        <input type="date" id="due_date">
+
+        <button type="submit" class="primary">Save Record</button>
+    </form>
+</div>
+
+<!-- ===================== RECORDS SCREEN ===================== -->
+<div id="screen-records" class="screen">
+    <h3>Circulation Register</h3>
+
+    <h4>Most Borrowed Titles</h4>
+    <ul id="most-borrowed-list"></ul>
+
+    <form class="toolbar" onsubmit="return false;">
+        <input type="text" id="search-box" placeholder="Search title, member or book ID"
+               oninput="renderRecords()">
+        <select id="status-filter" onchange="renderRecords()">
+            <option value="All">All</option>
+            <option value="Overdue">Overdue</option>
+            <option value="Issued">Issued</option>
+            <option value="Returned">Returned</option>
+        </select>
+        <button type="button" onclick="clearFilters()">Clear</button>
+    </form>
+
+    <p class="count-line" id="count-line"></p>
+
+    <div id="records-state"></div>
+
+    <table id="records-table" style="display:none;">
+        <thead>
+            <tr>
+                <th>ID</th><th>Book ID</th><th>Title</th><th>Member</th>
+                <th>Issue Date</th><th>Due Date</th><th>Return Date</th>
+                <th>Status</th><th>Overdue Days</th><th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="records-body"></tbody>
+    </table>
+</div>
+
+<script>
+/* ============================================================
+   DATA: sample records live only in memory (JS array).
+   A few are deliberately "awkward" for testing:
+     - record 15  -> missing book_id
+     - records 20/21 -> two very similar member names
+     - record 40  -> a junk row
+   ============================================================ */
+
+let nextId = 1;
+let records = [];
+
+function todayStr() {
+    return new Date().toISOString().split("T")[0];
+}
+
+function addDays(dateStr, days) {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split("T")[0];
+}
+
+function buildSampleData() {
+    const titles = [
+        "The Alchemist", "Wings of Fire", "Introduction to Algorithms",
+        "Harry Potter and the Goblet of Fire", "Rich Dad Poor Dad",
+        "The Silent Patient", "Sapiens", "Clean Code", "Atomic Habits",
+        "The Da Vinci Code", "1984", "To Kill a Mockingbird",
+        "The Hobbit", "A Brief History of Time", "Ikigai"
+    ];
+    const members = [
+        "Arun Kumar", "Divya S", "Karthik R", "Meena V", "Priya M",
+        "Suresh Babu", "Lavanya P", "Naveen T", "Deepa R", "Ramesh K"
+    ];
+
+    const data = [];
+    for (let i = 1; i <= 39; i++) {
+        const daysAgo = 20 + Math.floor(Math.random() * 40);
+        const issueDate = addDays(todayStr(), -daysAgo);
+        const dueDate = addDays(issueDate, 14);
+
+        let returnDate = "";
+        if (Math.random() < 0.5) {
+            const offset = Math.floor(Math.random() * 11) - 5;
+            let r = addDays(dueDate, offset);
+            if (r < issueDate) r = issueDate;
+            returnDate = r;
+        }
+
+        data.push({
+            id: nextId++,
+            bookId: "BK" + (100 + i),
+            title: titles[Math.floor(Math.random() * titles.length)],
+            memberName: members[Math.floor(Math.random() * members.length)],
+            issueDate: issueDate,
+            dueDate: dueDate,
+            returnDate: returnDate
+        });
+    }
+
+    // Awkward case 1: missing book_id
+    data[14].bookId = "";
+
+    // Awkward case 2: two very similar member names
+    data[19].memberName = "Karthik R";
+    data[20].memberName = "Karthik R.";
+
+    // Awkward case 3: a junk row with nothing useful in it
+    data.push({
+        id: nextId++, bookId: "", title: "", memberName: "",
+        issueDate: "", dueDate: "", returnDate: ""
+    });
+
+    return data;
+}
+
+records = buildSampleData();
+
+/* ============================================================
+   TAB SWITCHING
+   ============================================================ */
+function showScreen(name) {
+    document.getElementById("screen-issue").classList.toggle("active", name === "issue");
+    document.getElementById("screen-records").classList.toggle("active", name === "records");
+    document.getElementById("tab-issue").classList.toggle("active", name === "issue");
+    document.getElementById("tab-records").classList.toggle("active", name === "records");
+    if (name === "records") renderRecords();
+}
+
+/* ============================================================
+   VALIDATION + ADD RECORD  (Task 2, Task 4 - fail clearly, never
+   report success on a rejected save)
+   ============================================================ */
+function isValidDate(text) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) && !isNaN(new Date(text));
+}
+
+function handleAddRecord(event) {
+    event.preventDefault();
+
+    const bookId = document.getElementById("book_id").value.trim();
+    const title = document.getElementById("title").value.trim();
+    const memberName = document.getElementById("member_name").value.trim();
+    const issueDate = document.getElementById("issue_date").value;
+    const dueDate = document.getElementById("due_date").value;
+
+    const errors = [];
+    if (!bookId) errors.push("Book ID is required.");
+    if (!title) errors.push("Title is required.");
+    if (!memberName) errors.push("Member name is required.");
+    if (!isValidDate(issueDate)) errors.push("Issue date is missing or not a valid date.");
+    if (!isValidDate(dueDate)) errors.push("Due date is missing or not a valid date.");
+    if (isValidDate(issueDate) && isValidDate(dueDate) && dueDate < issueDate) {
+        errors.push("Due date cannot be before the issue date.");
+    }
+
+    const errorBox = document.getElementById("issue-errors");
+    if (errors.length > 0) {
+        errorBox.innerHTML = '<div class="state-box state-error"><ul>' +
+            errors.map(e => `<li>${e}</li>`).join("") + "</ul></div>";
+        return false; // save rejected - nothing is added, nothing pretends to succeed
+    }
+
+    errorBox.innerHTML = "";
+    records.push({
+        id: nextId++, bookId, title, memberName,
+        issueDate, dueDate, returnDate: ""
+    });
+
+    document.getElementById("issue-form").reset();
+    showScreen("records");
+    return false;
+}
+
+/* ============================================================
+   DERIVED FIELDS: overdue days + status, always calculated here
+   (never trusted from anywhere else)
+   ============================================================ */
+function getDisplayFields(record) {
+    if (!record.bookId && !record.title) {
+        return { overdueDays: "-", status: "Incomplete record" };
+    }
+    if (record.returnDate) {
+        return { overdueDays: 0, status: "Returned" };
+    }
+    if (record.dueDate && isValidDate(record.dueDate)) {
+        const due = new Date(record.dueDate);
+        const today = new Date(todayStr());
+        if (due < today) {
+            const days = Math.round((today - due) / (1000 * 60 * 60 * 24));
+            return { overdueDays: days, status: "Overdue" };
+        }
+        return { overdueDays: 0, status: "Issued" };
+    }
+    return { overdueDays: "-", status: "Unknown (bad due date)" };
+}
+
+const STATUS_PRIORITY = { "Overdue": 0, "Issued": 1, "Returned": 2, "Incomplete record": 3 };
+
+/* ============================================================
+   RENDER RECORDS: search, filter, order, count, and every state
+   (Task 3, Task 4)
+   ============================================================ */
+function clearFilters() {
+    document.getElementById("search-box").value = "";
+    document.getElementById("status-filter").value = "All";
+    renderRecords();
+}
+
+function renderRecords() {
+    const searchText = document.getElementById("search-box").value.trim().toLowerCase();
+    const statusFilter = document.getElementById("status-filter").value;
+
+    const allWithFields = records.map(r => ({ ...r, ...getDisplayFields(r) }));
+
+    let filtered = allWithFields;
+    if (searchText) {
+        filtered = filtered.filter(r =>
+            r.bookId.toLowerCase().includes(searchText) ||
+            r.title.toLowerCase().includes(searchText) ||
+            r.memberName.toLowerCase().includes(searchText)
+        );
+    }
+    if (statusFilter !== "All") {
+        filtered = filtered.filter(r => r.status === statusFilter);
+    }
+
+    filtered.sort((a, b) => {
+        const pa = STATUS_PRIORITY[a.status] ?? 9;
+        const pb = STATUS_PRIORITY[b.status] ?? 9;
+        if (pa !== pb) return pa - pb;
+        const da = typeof a.overdueDays === "number" ? a.overdueDays : 0;
+        const db = typeof b.overdueDays === "number" ? b.overdueDays : 0;
+        return db - da;
+    });
+
+    document.getElementById("count-line").textContent =
+        `Showing ${filtered.length} of ${allWithFields.length} records` +
+        ((searchText || statusFilter !== "All") ? " (filtered)" : "");
+
+    const stateBox = document.getElementById("records-state");
+    const table = document.getElementById("records-table");
+
+    if (allWithFields.length === 0) {
+        stateBox.innerHTML = '<div class="state-box state-empty">No records yet. Issue a book to get started.</div>';
+        table.style.display = "none";
+    } else if (filtered.length === 0) {
+        stateBox.innerHTML = `<div class="state-box state-empty">No records match your search/filter. Try clearing the filters.</div>`;
+        table.style.display = "none";
+    } else {
+        stateBox.innerHTML = "";
+        table.style.display = "table";
+        renderTableRows(filtered);
+    }
+
+    renderMostBorrowed(allWithFields);
+}
+
+function renderTableRows(rows) {
+    const body = document.getElementById("records-body");
+    body.innerHTML = rows.map(r => `
+        <tr>
+            <td>${r.id}</td>
+            <td>${r.bookId || "-"}</td>
+            <td>${r.title || "-"}</td>
+            <td>${r.memberName || "-"}</td>
+            <td>${r.issueDate || "-"}</td>
+            <td>${r.dueDate || "-"}</td>
+            <td>${r.returnDate || "-"}</td>
+            <td class="${r.status}">${r.status}</td>
+            <td>${r.overdueDays}</td>
+            <td>
+                ${(r.status === "Issued" || r.status === "Overdue")
+                    ? `<button onclick="markReturned(${r.id})">Mark Returned</button>`
+                    : ""}
+            </td>
+        </tr>
+    `).join("");
+}
+
+function renderMostBorrowed(all) {
+    const counts = {};
+    all.forEach(r => {
+        if (r.title) counts[r.title] = (counts[r.title] || 0) + 1;
+    });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const list = document.getElementById("most-borrowed-list");
+    list.innerHTML = sorted.length
+        ? sorted.map(([title, count]) => `<li>${title} — ${count} time(s)</li>`).join("")
+        : "<li>No titles to rank yet.</li>";
+}
+
+/* ============================================================
+   MARK RETURNED
+   ============================================================ */
+function markReturned(id) {
+    if (!confirm("Mark this book as returned today?")) return;
+    const record = records.find(r => r.id === id);
+    if (record) record.returnDate = todayStr();
+    renderRecords();
+}
+
+/* Set default issue date to today when the page loads */
+document.getElementById("issue_date").value = todayStr();
+</script>
+
+</body>
+</html>
